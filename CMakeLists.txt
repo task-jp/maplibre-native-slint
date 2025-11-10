@@ -187,6 +187,7 @@ target_include_directories(maplibre-slint-example
         src
         platform
         ${CMAKE_SOURCE_DIR}/vendor/maplibre-native/include
+        ${CMAKE_SOURCE_DIR}/vendor/maplibre-native/src
         ${CMAKE_BINARY_DIR}/vendor/maplibre-native/include
         ${CMAKE_CURRENT_BINARY_DIR}
         ${GLES3_INCLUDE_DIRS}

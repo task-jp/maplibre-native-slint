@@ -12,6 +12,167 @@
 #include "mbgl/util/geo.hpp"
 #include "mbgl/util/logging.hpp"
 #include "mbgl/util/premultiply.hpp"
+#include "mbgl/style/sources/geojson_source.hpp"
+#include "mbgl/style/layers/circle_layer.hpp"
+#include "mbgl/style/layers/symbol_layer.hpp"
+#include "mbgl/style/image.hpp"
+#include "mbgl/style/expression/dsl.hpp"
+#include "mbgl/style/expression/expression.hpp"
+#include "mbgl/style/expression/compound_expression.hpp"
+#include "mbgl/style/expression/literal.hpp"
+#include "mbgl/style/filter.hpp"
+#include "mbgl/style/conversion/filter.hpp"
+#include "mbgl/style/conversion/json.hpp"
+#include "mbgl/util/geojson.hpp"
+#include "mbgl/util/image.hpp"
+#include <mapbox/geojson.hpp>
+#include <mapbox/geojson/rapidjson.hpp>
+#include <fstream>
+#include <sstream>
+
+namespace {
+// POI layer configuration constants
+constexpr const char* POI_SOURCE_ID = "pois-source";
+constexpr const char* MARKER_TYPE_PROPERTY = "marker-type";
+constexpr const char* PITCH_ALIGNMENT_PROPERTY = "pitch-alignment";
+constexpr const char* ICON_PROPERTY = "icon";
+constexpr const char* NAME_PROPERTY = "name";
+
+constexpr const char* MARKER_TYPE_ICON = "icon";
+constexpr const char* MARKER_TYPE_CIRCLE = "circle";
+constexpr const char* MARKER_TYPE_TEXT = "text";
+
+constexpr const char* PITCH_ALIGNMENT_MAP = "map";
+constexpr const char* PITCH_ALIGNMENT_VIEWPORT = "viewport";
+
+// Circle marker styling constants
+constexpr float CIRCLE_RADIUS = 8.0f;
+constexpr float CIRCLE_STROKE_WIDTH = 2.0f;
+constexpr const char* CIRCLE_COLOR_HEX = "#FF6B6B";
+
+// Text marker styling constants
+constexpr float TEXT_SIZE = 12.0f;
+constexpr float TEXT_HALO_WIDTH = 2.0f;
+constexpr const char* TEXT_COLOR_HEX = "#333333";
+
+// Icon marker styling constants
+constexpr float ICON_SIZE = 0.5f;
+
+// Create filter JSON string for marker type and pitch alignment
+std::string createPOIFilter(const char* marker_type, const char* pitch_alignment) {
+    std::ostringstream oss;
+    oss << R"(["all", ["==", ["get", ")"
+        << MARKER_TYPE_PROPERTY << R"("], ")"
+        << marker_type << R"("], ["==", ["get", ")"
+        << PITCH_ALIGNMENT_PROPERTY << R"("], ")"
+        << pitch_alignment << R"("]])";
+    return oss.str();
+}
+
+// Apply filter to a layer
+template<typename LayerType>
+void applyFilter(std::unique_ptr<LayerType>& layer, const std::string& filterJson) {
+    using namespace mbgl::style;
+    using namespace mbgl::style::conversion;
+
+    Error error;
+    auto filterResult = convertJSON<Filter>(filterJson, error);
+    if (filterResult) {
+        layer->setFilter(*filterResult);
+    }
+}
+
+// Create and configure icon layer
+std::unique_ptr<mbgl::style::SymbolLayer> createIconLayer(
+    const std::string& layer_id,
+    const std::string& source_id,
+    const char* marker_type,
+    const char* pitch_alignment,
+    mbgl::style::AlignmentType alignment) {
+
+    using namespace mbgl::style;
+    using namespace mbgl::style::expression;
+    using namespace mbgl::style::expression::dsl;
+
+    auto layer = std::make_unique<SymbolLayer>(layer_id, source_id);
+
+    // Apply filter
+    applyFilter(layer, createPOIFilter(marker_type, pitch_alignment));
+
+    // Configure icon properties
+    auto iconImageExpr = PropertyExpression<expression::Image>(
+        image(get(literal(ICON_PROPERTY))));
+    layer->setIconImage(PropertyValue<expression::Image>(std::move(iconImageExpr)));
+    layer->setIconSize(PropertyValue<float>(ICON_SIZE));
+    layer->setIconAllowOverlap(PropertyValue<bool>(true));
+    layer->setIconIgnorePlacement(PropertyValue<bool>(true));
+    layer->setIconPitchAlignment(PropertyValue<AlignmentType>(alignment));
+
+    return layer;
+}
+
+// Create and configure circle layer
+std::unique_ptr<mbgl::style::CircleLayer> createCircleLayer(
+    const std::string& layer_id,
+    const std::string& source_id,
+    const char* marker_type,
+    const char* pitch_alignment,
+    mbgl::style::AlignmentType alignment) {
+
+    using namespace mbgl::style;
+
+    auto layer = std::make_unique<CircleLayer>(layer_id, source_id);
+
+    // Apply filter
+    applyFilter(layer, createPOIFilter(marker_type, pitch_alignment));
+
+    // Configure circle properties
+    layer->setCircleRadius(PropertyValue<float>(CIRCLE_RADIUS));
+    layer->setCircleColor(PropertyValue<mbgl::Color>(
+        mbgl::Color::parse(CIRCLE_COLOR_HEX).value()));
+    layer->setCircleStrokeColor(PropertyValue<mbgl::Color>(
+        mbgl::Color::white()));
+    layer->setCircleStrokeWidth(PropertyValue<float>(CIRCLE_STROKE_WIDTH));
+    layer->setCirclePitchAlignment(PropertyValue<AlignmentType>(alignment));
+
+    return layer;
+}
+
+// Create and configure text layer
+std::unique_ptr<mbgl::style::SymbolLayer> createTextLayer(
+    const std::string& layer_id,
+    const std::string& source_id,
+    const char* marker_type,
+    const char* pitch_alignment,
+    mbgl::style::AlignmentType alignment) {
+
+    using namespace mbgl::style;
+    using namespace mbgl::style::expression;
+    using namespace mbgl::style::expression::dsl;
+
+    auto layer = std::make_unique<SymbolLayer>(layer_id, source_id);
+
+    // Apply filter
+    applyFilter(layer, createPOIFilter(marker_type, pitch_alignment));
+
+    // Configure text properties
+    auto textExpr = PropertyExpression<expression::Formatted>(
+        format(get(literal(NAME_PROPERTY))));
+    layer->setTextField(PropertyValue<expression::Formatted>(std::move(textExpr)));
+    layer->setTextSize(PropertyValue<float>(TEXT_SIZE));
+    layer->setTextColor(PropertyValue<mbgl::Color>(
+        mbgl::Color::parse(TEXT_COLOR_HEX).value()));
+    layer->setTextHaloColor(PropertyValue<mbgl::Color>(
+        mbgl::Color::white()));
+    layer->setTextHaloWidth(PropertyValue<float>(TEXT_HALO_WIDTH));
+    layer->setTextAllowOverlap(PropertyValue<bool>(true));
+    layer->setTextIgnorePlacement(PropertyValue<bool>(true));
+    layer->setTextPitchAlignment(PropertyValue<AlignmentType>(alignment));
+
+    return layer;
+}
+
+}  // namespace
 
 SlintMapLibre::SlintMapLibre() {
     // Defer RunLoop creation until initialize() when we know sizes and
@@ -111,6 +272,10 @@ void SlintMapLibre::setRenderCallback(std::function<void()> callback) {
     m_renderCallback = std::move(callback);
 }
 
+void SlintMapLibre::setIconRegistrationCallback(std::function<void()> callback) {
+    m_iconRegistrationCallback = std::move(callback);
+}
+
 // MapObserver implementation
 void SlintMapLibre::onWillStartLoadingMap() {
     std::cout << "[MapObserver] Will start loading map" << std::endl;
@@ -121,6 +286,22 @@ void SlintMapLibre::onWillStartLoadingMap() {
 void SlintMapLibre::onDidFinishLoadingStyle() {
     std::cout << "[MapObserver] Did finish loading style" << std::endl;
     style_loaded = true;
+
+    // Register icons when style loads
+    if (m_iconRegistrationCallback) {
+        std::cout << "[MapObserver] Registering POI icons" << std::endl;
+        m_iconRegistrationCallback();
+    }
+
+    // Reapply POI data after every style load (including style changes)
+    if (!current_poi_geojson.empty()) {
+        std::cout << "[MapObserver] Reapplying POI data to new style" << std::endl;
+        // Temporarily save the data, call update which will recreate layers
+        std::string poi_data = current_poi_geojson;
+        // Clear it temporarily so update_pois_geojson doesn't skip
+        current_poi_geojson.clear();
+        update_pois_geojson(poi_data);
+    }
 }
 
 void SlintMapLibre::onDidBecomeIdle() {
@@ -450,6 +631,241 @@ void SlintMapLibre::fly_to(const std::string& location) {
     custom_anim.duration_ms = 2500;
     request_repaint();
     arm_forced_repaint_ms(custom_anim.duration_ms + 600);
+}
+
+void SlintMapLibre::update_pois_geojson(const std::string& geojson_data) {
+    if (!map) {
+        std::cout << "[SlintMapLibre] Cannot update POIs: map not initialized"
+                  << std::endl;
+        return;
+    }
+
+    // Always save the current POI data for reapplication after style changes
+    current_poi_geojson = geojson_data;
+
+    if (!style_loaded) {
+        std::cout << "[SlintMapLibre] Style not loaded yet, POI data saved for later"
+                  << std::endl;
+        return;
+    }
+
+    std::cout << "[SlintMapLibre] Updating POIs with GeoJSON data" << std::endl;
+
+    auto& style = map->getStyle();
+
+    try {
+        // Parse GeoJSON using mapbox::geojson::parse
+        auto geojson = mapbox::geojson::parse(geojson_data);
+
+        using namespace mbgl::style;
+
+        // Check if source exists, create or update
+        auto* source = style.getSource(POI_SOURCE_ID);
+        if (!source) {
+            // Create new GeoJSON source
+            std::cout << "[SlintMapLibre] Creating new POI source" << std::endl;
+            auto geojson_source = std::make_unique<GeoJSONSource>(POI_SOURCE_ID);
+            geojson_source->setGeoJSON(geojson);
+            style.addSource(std::move(geojson_source));
+
+            // Find the first symbol layer to insert POI layers before it
+            std::optional<std::string> firstSymbolLayerId;
+            for (const auto& layer : style.getLayers()) {
+                auto* typeInfo = layer->getTypeInfo();
+                if (typeInfo && std::string(typeInfo->type) == "symbol") {
+                    firstSymbolLayerId = layer->getID();
+                    std::cout << "[SlintMapLibre] Found first symbol layer: "
+                              << *firstSymbolLayerId << std::endl;
+                    break;
+                }
+            }
+
+            // Create six separate layers for different marker types and pitch alignments
+            // Viewport layers render on top, map layers render below map labels
+
+            // Icon layers
+            auto icon_viewport = createIconLayer(
+                "pois-icon-viewport-layer", POI_SOURCE_ID,
+                MARKER_TYPE_ICON, PITCH_ALIGNMENT_VIEWPORT, AlignmentType::Viewport);
+            style.addLayer(std::move(icon_viewport));
+            std::cout << "[SlintMapLibre] Icon-viewport layer created" << std::endl;
+
+            auto icon_map = createIconLayer(
+                "pois-icon-map-layer", POI_SOURCE_ID,
+                MARKER_TYPE_ICON, PITCH_ALIGNMENT_MAP, AlignmentType::Map);
+            if (firstSymbolLayerId) {
+                style.addLayer(std::move(icon_map), *firstSymbolLayerId);
+            } else {
+                style.addLayer(std::move(icon_map));
+            }
+            std::cout << "[SlintMapLibre] Icon-map layer created" << std::endl;
+
+            // Circle layers
+            auto circle_viewport = createCircleLayer(
+                "pois-circle-viewport-layer", POI_SOURCE_ID,
+                MARKER_TYPE_CIRCLE, PITCH_ALIGNMENT_VIEWPORT, AlignmentType::Viewport);
+            style.addLayer(std::move(circle_viewport));
+            std::cout << "[SlintMapLibre] Circle-viewport layer created" << std::endl;
+
+            auto circle_map = createCircleLayer(
+                "pois-circle-map-layer", POI_SOURCE_ID,
+                MARKER_TYPE_CIRCLE, PITCH_ALIGNMENT_MAP, AlignmentType::Map);
+            if (firstSymbolLayerId) {
+                style.addLayer(std::move(circle_map), *firstSymbolLayerId);
+            } else {
+                style.addLayer(std::move(circle_map));
+            }
+            std::cout << "[SlintMapLibre] Circle-map layer created" << std::endl;
+
+            // Text layers
+            auto text_viewport = createTextLayer(
+                "pois-text-viewport-layer", POI_SOURCE_ID,
+                MARKER_TYPE_TEXT, PITCH_ALIGNMENT_VIEWPORT, AlignmentType::Viewport);
+            style.addLayer(std::move(text_viewport));
+            std::cout << "[SlintMapLibre] Text-viewport layer created" << std::endl;
+
+            auto text_map = createTextLayer(
+                "pois-text-map-layer", POI_SOURCE_ID,
+                MARKER_TYPE_TEXT, PITCH_ALIGNMENT_MAP, AlignmentType::Map);
+            if (firstSymbolLayerId) {
+                style.addLayer(std::move(text_map), *firstSymbolLayerId);
+            } else {
+                style.addLayer(std::move(text_map));
+            }
+            std::cout << "[SlintMapLibre] Text-map layer created" << std::endl;
+
+            std::cout << "[SlintMapLibre] All POI layers created successfully" << std::endl;
+        } else {
+            // Update existing source
+            std::cout << "[SlintMapLibre] Updating existing POI source" << std::endl;
+            auto* geojson_source = static_cast<GeoJSONSource*>(source);
+            geojson_source->setGeoJSON(geojson);
+        }
+
+        request_repaint();
+    } catch (const std::exception& e) {
+        std::cerr << "[SlintMapLibre] Error updating POIs: " << e.what()
+                  << std::endl;
+    }
+}
+
+void SlintMapLibre::register_poi_icon(const std::string& icon_id,
+                                       const slint::Image& image) {
+    if (!map || !style_loaded) {
+        std::cout << "[SlintMapLibre] Cannot register icon: map not ready"
+                  << std::endl;
+        return;
+    }
+
+    std::cout << "[SlintMapLibre] Registering POI icon: " << icon_id << std::endl;
+
+    // Load the PNG file directly from the assets directory
+    // icon_id should include the file extension
+    std::string png_path = "examples/assets/" + icon_id;
+
+    try {
+        // Read PNG file using standard C++ ifstream
+        std::ifstream file(png_path, std::ios::binary);
+        if (!file) {
+            throw std::runtime_error("Could not open file");
+        }
+
+        std::ostringstream buffer;
+        buffer << file.rdbuf();
+        std::string png_data = buffer.str();
+
+        std::cout << "[SlintMapLibre] Loaded PNG file: " << png_path
+                  << " (" << png_data.size() << " bytes)" << std::endl;
+
+        // Decode the PNG image
+        mbgl::PremultipliedImage premult_image = mbgl::decodeImage(png_data);
+
+        std::cout << "[SlintMapLibre] Decoded image: "
+                  << premult_image.size.width << "x" << premult_image.size.height
+                  << std::endl;
+
+        // Create MapLibre Image
+        auto map_image = std::make_unique<mbgl::style::Image>(
+            icon_id, std::move(premult_image), 1.0f /* pixel ratio */);
+
+        // Add to style
+        auto& style = map->getStyle();
+        style.addImage(std::move(map_image));
+
+        std::cout << "[SlintMapLibre] POI icon registered from PNG: " << icon_id << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "[SlintMapLibre] Failed to load PNG icon " << png_path
+                  << ": " << e.what() << std::endl;
+        std::cerr << "[SlintMapLibre] Falling back to placeholder icon" << std::endl;
+
+        // Fallback: Create placeholder icon
+        uint32_t icon_width = 32;
+        uint32_t icon_height = 48;
+
+        mbgl::PremultipliedImage premult_image({icon_width, icon_height});
+        auto* data = reinterpret_cast<uint8_t*>(premult_image.data.get());
+        std::memset(data, 0, icon_width * icon_height * 4);
+
+        // Color based on icon type
+        uint8_t r = 255, g = 0, b = 0; // Default red for landmarks
+        if (icon_id == "station") {
+            r = 52; g = 152; b = 219; // Blue for stations
+        }
+
+        // Draw a pin marker shape
+        int cx = icon_width / 2;
+        int cy_circle = 12;
+        int cy_bottom = icon_height - 4;
+        int radius = 10;
+
+        for (int y = 0; y < static_cast<int>(icon_height); ++y) {
+            for (int x = 0; x < static_cast<int>(icon_width); ++x) {
+                int dx = x - cx;
+                int dy = y - cy_circle;
+
+                if (dx * dx + dy * dy <= radius * radius) {
+                    int idx = (y * icon_width + x) * 4;
+                    data[idx + 0] = r;
+                    data[idx + 1] = g;
+                    data[idx + 2] = b;
+                    data[idx + 3] = 255;
+                } else if (y > cy_circle && y < cy_bottom) {
+                    float tail_width = (float)(cy_bottom - y) / (cy_bottom - cy_circle) * 6.0f;
+                    if (std::abs(dx) <= tail_width) {
+                        int idx = (y * icon_width + x) * 4;
+                        data[idx + 0] = r;
+                        data[idx + 1] = g;
+                        data[idx + 2] = b;
+                        data[idx + 3] = 255;
+                    }
+                }
+            }
+        }
+
+        // Add white circle in center
+        int inner_radius = 4;
+        for (int y = 0; y < static_cast<int>(icon_height); ++y) {
+            for (int x = 0; x < static_cast<int>(icon_width); ++x) {
+                int dx = x - cx;
+                int dy = y - cy_circle;
+                if (dx * dx + dy * dy <= inner_radius * inner_radius) {
+                    int idx = (y * icon_width + x) * 4;
+                    data[idx + 0] = 255;
+                    data[idx + 1] = 255;
+                    data[idx + 2] = 255;
+                    data[idx + 3] = 255;
+                }
+            }
+        }
+
+        auto map_image = std::make_unique<mbgl::style::Image>(
+            icon_id, std::move(premult_image), 1.0f);
+
+        auto& style = map->getStyle();
+        style.addImage(std::move(map_image));
+
+        std::cout << "[SlintMapLibre] POI icon registered (placeholder): " << icon_id << std::endl;
+    }
 }
 
 static inline double ease_in_out(double t) {

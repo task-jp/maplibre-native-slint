@@ -61,6 +61,7 @@ public:
 
     void initialize(int width, int height);
     void setRenderCallback(std::function<void()> callback);
+    void setIconRegistrationCallback(std::function<void()> callback);
     slint::Image render_map();
     void resize(int width, int height);
     void handle_mouse_press(float x, float y);
@@ -72,6 +73,10 @@ public:
     void set_bearing(float bearing_value);
     void setStyleUrl(const std::string& url);
     void fly_to(const std::string& location);
+
+    // POI management
+    void update_pois_geojson(const std::string& geojson_data);
+    void register_poi_icon(const std::string& icon_id, const slint::Image& image);
 
     // Manually drive the map's run loop
     void run_map_loop();
@@ -98,6 +103,7 @@ private:
     // The observer must outlive the frontend.
     std::unique_ptr<mbgl::util::RunLoop> run_loop;  // created in initialize()
     std::function<void()> m_renderCallback;
+    std::function<void()> m_iconRegistrationCallback;
 
     // Observer and frontend must be declared before the map.
     // The observer must be declared before the frontend to ensure it's
@@ -121,6 +127,9 @@ private:
 
     bool fallback_style_applied{false};
     std::atomic<int> forced_repaint_frames{0};
+
+    // Current POI data - persisted across style changes
+    std::string current_poi_geojson;
 
     struct CustomAnim {
         bool active = false;

@@ -6,8 +6,32 @@ export struct Size {
     height: length,
 }
 
+// Define enum for POI marker types
+export enum MarkerType {
+    icon,    // Use custom icon image
+    circle,  // Use colored circle
+    text,    // Use text label
+}
+
+// Define enum for pitch alignment
+export enum PitchAlignment {
+    map,      // Affected by pitch (rotates with map)
+    viewport, // Not affected by pitch (always parallel to screen)
+}
+
+// Define a struct to hold POI (Point of Interest) data
+export struct POI {
+    name: string,
+    latitude: float,
+    longitude: float,
+    marker-type: MarkerType,
+    icon: string,
+    pitch-alignment: PitchAlignment,
+}
+
 export global MapAdapter {
     in-out property <image> map_texture;
+
     callback tick_map_loop();
     callback mouse_press(float, float);
     callback mouse_release(float, float);
@@ -18,6 +42,8 @@ export global MapAdapter {
     callback fly_to(string);
     callback pitch_changed(int);
     callback bearing_changed(float);
+    callback pois_updated([POI]);
+    callback register_poi_icon(string, image);
 }
 
 export component MapWindow inherits Window {
@@ -43,6 +69,20 @@ export component MapWindow inherits Window {
         "https://demotiles.maplibre.org/style.json",
         "https://tile.openstreetmap.jp/styles/osm-bright/style.json"
     ];
+
+    // POI data - dummy examples
+    in-out property <[POI]> pois: [
+        { name: "Tokyo Tower", latitude: 35.6586, longitude: 139.7454, marker-type: MarkerType.icon, icon: "landmark.png", pitch-alignment: PitchAlignment.viewport },
+        { name: "Shibuya Station", latitude: 35.6580, longitude: 139.7016, marker-type: MarkerType.circle, pitch-alignment: PitchAlignment.map },
+        { name: "Senso-ji Temple", latitude: 35.7148, longitude: 139.7967, marker-type: MarkerType.text, pitch-alignment: PitchAlignment.viewport },
+        { name: "Eiffel Tower", latitude: 48.8584, longitude: 2.2945, marker-type: MarkerType.icon, icon: "landmark.png", pitch-alignment: PitchAlignment.map },
+        { name: "Statue of Liberty", latitude: 40.6892, longitude: -74.0445, marker-type: MarkerType.circle, pitch-alignment: PitchAlignment.viewport },
+    ];
+
+    // Notify backend when POIs change
+    changed pois => {
+        MapAdapter.pois_updated(root.pois);
+    }
 
     Timer {
         interval: 16ms;

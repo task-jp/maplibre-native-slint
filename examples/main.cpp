@@ -1,5 +1,6 @@
 #include <iostream>
 #include <memory>
+#include <set>
 #include <vector>
 
 #include "map_window.h"
@@ -26,6 +27,34 @@ int main(int argc, char** argv) {
     // Pass the render function to SlintMapLibre, which will pass it to the
     // observer.
     slint_map_libre->setRenderCallback(render_function);
+
+    // Set up icon registration callback - will be called when style loads
+    slint_map_libre->setIconRegistrationCallback([=]() {
+        std::cout << "[main] Icon registration callback invoked" << std::endl;
+
+        // Collect unique icon names from POI data
+        auto pois_model = main_window->get_pois();
+        std::set<std::string> icon_names;
+
+        for (size_t i = 0; i < pois_model->row_count(); ++i) {
+            auto poi = pois_model->row_data(i);
+            if (!poi.has_value()) continue;
+
+            // Only collect icons for POIs with marker-type == Icon
+            if (poi->marker_type == MarkerType::Icon && !poi->icon.empty()) {
+                icon_names.insert(std::string(poi->icon.data(), poi->icon.size()));
+            }
+        }
+
+        // Register each unique icon
+        for (const auto& icon_name : icon_names) {
+            std::cout << "[main] Registering icon: " << icon_name << std::endl;
+            // Note: The slint::Image parameter is not used by register_poi_icon,
+            // which loads the PNG file directly from the filesystem
+            main_window->global<MapAdapter>().invoke_register_poi_icon(
+                slint::SharedString(icon_name), slint::Image());
+        }
+    });
 
     // The timer in .slint file will trigger this callback periodically.
     // This callback drives the MapLibre run loop and, if needed, performs
@@ -82,6 +111,73 @@ int main(int argc, char** argv) {
                 std::string(location.data(), location.size()));
         });
 
+    // Register POI icon callback
+    main_window->global<MapAdapter>().on_register_poi_icon(
+        [=](const slint::SharedString& icon_id, const slint::Image& image) {
+            slint_map_libre->register_poi_icon(
+                std::string(icon_id.data(), icon_id.size()), image);
+        });
+
+    // POI updates - convert POI array to GeoJSON
+    main_window->global<MapAdapter>().on_pois_updated(
+        [=](const std::shared_ptr<slint::Model<POI>>& pois_model) {
+            if (!pois_model) {
+                std::cout << "[main] Received null POI model" << std::endl;
+                return;
+            }
+
+            size_t count = pois_model->row_count();
+            std::cout << "[main] Received " << count << " POIs" << std::endl;
+
+            // Build GeoJSON FeatureCollection
+            std::string geojson = R"({"type":"FeatureCollection","features":[)";
+            for (size_t i = 0; i < count; ++i) {
+                auto poi = pois_model->row_data(i);
+                if (!poi.has_value())
+                    continue;
+
+                if (i > 0)
+                    geojson += ",";
+
+                geojson += R"({"type":"Feature","geometry":{"type":"Point","coordinates":[)";
+                geojson += std::to_string(poi->longitude);
+                geojson += ",";
+                geojson += std::to_string(poi->latitude);
+                geojson += R"(]},"properties":{"name":")";
+                geojson += std::string(poi->name.data(), poi->name.size());
+                geojson += R"(","marker-type":")";
+                // Convert enum to string using Slint-generated enum
+                switch (poi->marker_type) {
+                    case MarkerType::Icon:
+                        geojson += "icon";
+                        break;
+                    case MarkerType::Circle:
+                        geojson += "circle";
+                        break;
+                    case MarkerType::Text:
+                        geojson += "text";
+                        break;
+                }
+                geojson += R"(","icon":")";
+                geojson += std::string(poi->icon.data(), poi->icon.size());
+                geojson += R"(","pitch-alignment":")";
+                // Convert pitch alignment enum to string
+                switch (poi->pitch_alignment) {
+                    case PitchAlignment::Map:
+                        geojson += "map";
+                        break;
+                    case PitchAlignment::Viewport:
+                        geojson += "viewport";
+                        break;
+                }
+                geojson += R"("}})";;
+            }
+            geojson += "]}";
+
+            std::cout << "[main] GeoJSON: " << geojson << std::endl;
+            slint_map_libre->update_pois_geojson(geojson);
+        });
+
     // Initialize/resize MapLibre to match the map image area
     main_window->on_map_size_changed([=]() {
         const auto s = main_window->get_map_size();
@@ -92,6 +188,11 @@ int main(int argc, char** argv) {
             if (!*initialized) {
                 slint_map_libre->initialize(w, h);
                 *initialized = true;
+
+                // Trigger initial POI update by manually calling the callback
+                // with current POI data
+                main_window->global<MapAdapter>().invoke_pois_updated(
+                    main_window->get_pois());
             } else {
                 slint_map_libre->resize(w, h);
             }
